@@ -2,12 +2,7 @@ import Foundation
 
 struct DestinationPathBuilder {
     func preferredRelativePath(for item: MediaItem) -> String {
-        let date = item.captureDate ?? item.modificationDate ?? Date()
-        let calendar = Calendar.current
-        let year = calendar.component(.year, from: date)
-        let dayFolder = AppDateFormatting.folderDate.string(from: date)
-
-        return ["Imports", String(year), dayFolder, item.filename].joined(separator: "/")
+        item.filename
     }
 
     func availableDestinationURL(for item: MediaItem, destinationRoot: URL) throws -> (url: URL, relativePath: String) {

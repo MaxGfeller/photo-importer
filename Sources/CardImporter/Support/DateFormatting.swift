@@ -7,10 +7,4 @@ enum AppDateFormatting {
         formatter.timeStyle = .short
         return formatter
     }()
-
-    static let folderDate: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd"
-        return formatter
-    }()
 }
