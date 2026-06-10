@@ -1,0 +1,185 @@
+import CSQLite
+import Foundation
+
+actor ImportLedger {
+    static let directoryName = ".card-importer"
+    static let databaseName = "imports.sqlite"
+
+    private var database: OpaquePointer?
+    let destinationURL: URL
+
+    init(destinationURL: URL) throws {
+        self.destinationURL = destinationURL
+
+        let ledgerDirectory = destinationURL.appendingPathComponent(Self.directoryName, isDirectory: true)
+        try FileManager.default.createDirectory(at: ledgerDirectory, withIntermediateDirectories: true)
+
+        let databaseURL = ledgerDirectory.appendingPathComponent(Self.databaseName)
+        if sqlite3_open(databaseURL.path, &database) != SQLITE_OK {
+            throw AppError.sqlite(Self.errorMessage(database))
+        }
+
+        try Self.execute("""
+        PRAGMA journal_mode=WAL;
+        CREATE TABLE IF NOT EXISTS imports (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            content_hash TEXT NOT NULL,
+            byte_count INTEGER NOT NULL,
+            original_filename TEXT NOT NULL,
+            source_volume_uuid TEXT,
+            source_relative_path TEXT NOT NULL,
+            capture_date REAL,
+            media_kind TEXT NOT NULL,
+            destination_path TEXT NOT NULL,
+            destination_volume_uuid TEXT,
+            imported_at REAL NOT NULL,
+            verified_at REAL NOT NULL,
+            UNIQUE(content_hash, byte_count)
+        );
+        CREATE INDEX IF NOT EXISTS idx_imports_source ON imports(source_volume_uuid, source_relative_path);
+        CREATE INDEX IF NOT EXISTS idx_imports_destination ON imports(destination_path);
+        """, database: database)
+    }
+
+    deinit {
+        if let database {
+            sqlite3_close(database)
+        }
+    }
+
+    func record(contentHash: String, byteCount: Int64) throws -> ImportRecord? {
+        var statement: OpaquePointer?
+        let sql = """
+        SELECT id, content_hash, byte_count, original_filename, source_volume_uuid, source_relative_path,
+               capture_date, media_kind, destination_path, destination_volume_uuid, imported_at, verified_at
+        FROM imports
+        WHERE content_hash = ? AND byte_count = ?
+        LIMIT 1;
+        """
+
+        try prepare(sql, statement: &statement)
+        defer { sqlite3_finalize(statement) }
+
+        bindText(contentHash, to: statement, at: 1)
+        sqlite3_bind_int64(statement, 2, byteCount)
+
+        guard sqlite3_step(statement) == SQLITE_ROW else {
+            return nil
+        }
+
+        return readRecord(from: statement)
+    }
+
+    func insert(_ record: ImportRecord) throws {
+        var statement: OpaquePointer?
+        let sql = """
+        INSERT OR REPLACE INTO imports (
+            content_hash, byte_count, original_filename, source_volume_uuid, source_relative_path,
+            capture_date, media_kind, destination_path, destination_volume_uuid, imported_at, verified_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+        """
+
+        try prepare(sql, statement: &statement)
+        defer { sqlite3_finalize(statement) }
+
+        bindText(record.contentHash, to: statement, at: 1)
+        sqlite3_bind_int64(statement, 2, record.byteCount)
+        bindText(record.originalFilename, to: statement, at: 3)
+        bindText(record.sourceVolumeUUID, to: statement, at: 4)
+        bindText(record.sourceRelativePath, to: statement, at: 5)
+        bindDate(record.captureDate, to: statement, at: 6)
+        bindText(record.mediaKind.rawValue, to: statement, at: 7)
+        bindText(record.destinationPath, to: statement, at: 8)
+        bindText(record.destinationVolumeUUID, to: statement, at: 9)
+        bindDate(record.importedAt, to: statement, at: 10)
+        bindDate(record.verifiedAt, to: statement, at: 11)
+
+        guard sqlite3_step(statement) == SQLITE_DONE else {
+            throw AppError.sqlite(Self.errorMessage(database))
+        }
+    }
+
+    func count() throws -> Int {
+        var statement: OpaquePointer?
+        try prepare("SELECT COUNT(*) FROM imports;", statement: &statement)
+        defer { sqlite3_finalize(statement) }
+
+        guard sqlite3_step(statement) == SQLITE_ROW else {
+            return 0
+        }
+
+        return Int(sqlite3_column_int(statement, 0))
+    }
+
+    private static func execute(_ sql: String, database: OpaquePointer?) throws {
+        var error: UnsafeMutablePointer<Int8>?
+        guard sqlite3_exec(database, sql, nil, nil, &error) == SQLITE_OK else {
+            let message = error.map { String(cString: $0) } ?? Self.errorMessage(database)
+            sqlite3_free(error)
+            throw AppError.sqlite(message)
+        }
+    }
+
+    private func prepare(_ sql: String, statement: inout OpaquePointer?) throws {
+        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK else {
+            throw AppError.sqlite(Self.errorMessage(database))
+        }
+    }
+
+    private func bindText(_ text: String?, to statement: OpaquePointer?, at index: Int32) {
+        guard let text else {
+            sqlite3_bind_null(statement, index)
+            return
+        }
+        sqlite3_bind_text(statement, index, text, -1, sqliteTransient)
+    }
+
+    private func bindDate(_ date: Date?, to statement: OpaquePointer?, at index: Int32) {
+        guard let date else {
+            sqlite3_bind_null(statement, index)
+            return
+        }
+        sqlite3_bind_double(statement, index, date.timeIntervalSince1970)
+    }
+
+    private func readRecord(from statement: OpaquePointer?) -> ImportRecord {
+        ImportRecord(
+            id: sqlite3_column_int64(statement, 0),
+            contentHash: columnString(statement, 1) ?? "",
+            byteCount: sqlite3_column_int64(statement, 2),
+            originalFilename: columnString(statement, 3) ?? "",
+            sourceVolumeUUID: columnString(statement, 4),
+            sourceRelativePath: columnString(statement, 5) ?? "",
+            captureDate: columnDate(statement, 6),
+            mediaKind: MediaKind(rawValue: columnString(statement, 7) ?? "") ?? .other,
+            destinationPath: columnString(statement, 8) ?? "",
+            destinationVolumeUUID: columnString(statement, 9),
+            importedAt: columnDate(statement, 10) ?? .distantPast,
+            verifiedAt: columnDate(statement, 11) ?? .distantPast
+        )
+    }
+
+    private func columnString(_ statement: OpaquePointer?, _ index: Int32) -> String? {
+        guard sqlite3_column_type(statement, index) != SQLITE_NULL,
+              let text = sqlite3_column_text(statement, index) else {
+            return nil
+        }
+        return String(cString: text)
+    }
+
+    private func columnDate(_ statement: OpaquePointer?, _ index: Int32) -> Date? {
+        guard sqlite3_column_type(statement, index) != SQLITE_NULL else {
+            return nil
+        }
+        return Date(timeIntervalSince1970: sqlite3_column_double(statement, index))
+    }
+
+    private static func errorMessage(_ database: OpaquePointer?) -> String {
+        if let database, let message = sqlite3_errmsg(database) {
+            return String(cString: message)
+        }
+        return "Unknown SQLite error"
+    }
+}
+
+private let sqliteTransient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
