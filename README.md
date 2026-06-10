@@ -12,7 +12,7 @@ A small macOS SwiftUI importer for SD cards and camera folders.
 - Generates thumbnails with Quick Look.
 - Copies selected media directly into the chosen destination folder.
 - Verifies each copied file with SHA-256 before recording it as imported.
-- Stores a SQLite import ledger in the destination at `.card-importer/imports.sqlite`.
+- Stores a global SQLite import ledger at `~/Library/Application Support/CardImporter/imports.sqlite`.
 - Can index existing destination media so previous manual copies are recognized later.
 
 ## Run
