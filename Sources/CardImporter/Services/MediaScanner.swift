@@ -64,6 +64,7 @@ struct MediaScanner {
                     hash: nil,
                     status: .pending,
                     destinationPath: nil,
+                    destinationAbsolutePath: nil,
                     errorMessage: nil
                 )
             )

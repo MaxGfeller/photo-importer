@@ -39,7 +39,9 @@ struct ImportService {
                 sourceRelativePath: item.relativePath,
                 captureDate: item.captureDate,
                 mediaKind: item.mediaKind,
+                destinationRootPath: destinationRoot.path,
                 destinationPath: target.relativePath,
+                destinationAbsolutePath: target.url.path,
                 destinationVolumeUUID: destinationVolumeUUID,
                 importedAt: now,
                 verifiedAt: now

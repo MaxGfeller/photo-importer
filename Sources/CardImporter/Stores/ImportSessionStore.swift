@@ -77,9 +77,7 @@ final class ImportSessionStore: ObservableObject {
         sourceURL = BookmarkStore.resolveSource()
         destinationURL = BookmarkStore.resolveDestination()
 
-        if let destinationURL {
-            configureLedger(destinationURL: destinationURL)
-        }
+        configureLedger()
 
         Task {
             await refreshVolumes()
@@ -127,7 +125,6 @@ final class ImportSessionStore: ObservableObject {
 
         destinationURL = url
         BookmarkStore.saveDestination(url)
-        configureLedger(destinationURL: url)
         statusMessage = "Destination set to \(url.lastPathComponent)."
 
         if !items.isEmpty {
@@ -171,7 +168,7 @@ final class ImportSessionStore: ObservableObject {
     func startClassification() {
         classificationTask?.cancel()
 
-        guard destinationURL != nil, ledger != nil, !items.isEmpty else {
+        guard ledger != nil, !items.isEmpty else {
             return
         }
 
@@ -187,7 +184,7 @@ final class ImportSessionStore: ObservableObject {
         }
 
         guard let ledger else {
-            configureLedger(destinationURL: destinationURL)
+            configureLedger()
             guard self.ledger != nil else {
                 return
             }
@@ -233,6 +230,7 @@ final class ImportSessionStore: ObservableObject {
                                 updated.status = .imported
                                 updated.hash = record.contentHash
                                 updated.destinationPath = record.destinationPath
+                                updated.destinationAbsolutePath = record.destinationAbsolutePath
                                 updated.errorMessage = nil
                             }
                             selectedItemIDs.remove(item.id)
@@ -266,7 +264,7 @@ final class ImportSessionStore: ObservableObject {
         }
 
         guard let ledger else {
-            configureLedger(destinationURL: destinationURL)
+            configureLedger()
             guard self.ledger != nil else {
                 return
             }
@@ -311,7 +309,9 @@ final class ImportSessionStore: ObservableObject {
                     sourceRelativePath: item.relativePath,
                     captureDate: item.captureDate,
                     mediaKind: item.mediaKind,
+                    destinationRootPath: destinationURL.path,
                     destinationPath: item.relativePath,
+                    destinationAbsolutePath: item.url.path,
                     destinationVolumeUUID: destinationVolumeUUID,
                     importedAt: now,
                     verifiedAt: now
@@ -369,28 +369,35 @@ final class ImportSessionStore: ObservableObject {
     }
 
     func revealDestination(_ item: MediaItem) {
-        guard let destinationURL = destinationURL,
-              let destinationPath = item.destinationPath else {
+        if let destinationAbsolutePath = item.destinationAbsolutePath {
+            NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: destinationAbsolutePath)])
             return
         }
 
-        let url = PathUtilities.url(forRelativePath: destinationPath, root: destinationURL)
-        NSWorkspace.shared.activateFileViewerSelecting([url])
+        if let destinationURL = destinationURL,
+           let destinationPath = item.destinationPath {
+            let url = PathUtilities.url(forRelativePath: destinationPath, root: destinationURL)
+            NSWorkspace.shared.activateFileViewerSelecting([url])
+        }
     }
 
     private func classifyItems() async {
-        guard let sourceURL, let destinationURL, let ledger else {
+        guard let sourceURL, let ledger else {
             return
         }
 
         await BookmarkStore.withSecurityScopedAccess(to: sourceURL) {
-            await BookmarkStore.withSecurityScopedAccess(to: destinationURL) {
-                await classifyItemsWithAccess(destinationURL: destinationURL, ledger: ledger)
+            if let destinationURL {
+                await BookmarkStore.withSecurityScopedAccess(to: destinationURL) {
+                    await classifyItemsWithAccess(destinationURL: destinationURL, ledger: ledger)
+                }
+            } else {
+                await classifyItemsWithAccess(destinationURL: nil, ledger: ledger)
             }
         }
     }
 
-    private func classifyItemsWithAccess(destinationURL: URL, ledger: ImportLedger) async {
+    private func classifyItemsWithAccess(destinationURL: URL?, ledger: ImportLedger) async {
         isClassifying = true
         progress = ImportProgress(currentFilename: nil, completedCount: 0, totalCount: items.count, currentMessage: "Checking imports")
 
@@ -422,6 +429,7 @@ final class ImportSessionStore: ObservableObject {
                     updated.hash = hash
                     updated.status = classification.status
                     updated.destinationPath = classification.destinationPath
+                    updated.destinationAbsolutePath = classification.destinationAbsolutePath
                     updated.errorMessage = nil
                 }
             } catch {
@@ -448,22 +456,22 @@ final class ImportSessionStore: ObservableObject {
     private func classify(
         item: MediaItem,
         hash: String,
-        destinationURL: URL,
+        destinationURL: URL?,
         ledger: ImportLedger
-    ) async throws -> (status: ImportStatus, destinationPath: String?) {
+    ) async throws -> (status: ImportStatus, destinationPath: String?, destinationAbsolutePath: String?) {
         if let record = try await ledger.record(contentHash: hash, byteCount: item.byteCount) {
-            let destinationFileURL = PathUtilities.url(forRelativePath: record.destinationPath, root: destinationURL)
-            if FileManager.default.fileExists(atPath: destinationFileURL.path) {
-                return (.imported, record.destinationPath)
-            }
-            return (.importedMissing, record.destinationPath)
+            return (.imported, record.destinationPath, record.destinationAbsolutePath)
+        }
+
+        guard let destinationURL else {
+            return (.pending, nil, nil)
         }
 
         let preferredRelativePath = pathBuilder.preferredRelativePath(for: item)
         let preferredURL = PathUtilities.url(forRelativePath: preferredRelativePath, root: destinationURL)
 
         guard FileManager.default.fileExists(atPath: preferredURL.path) else {
-            return (.pending, preferredRelativePath)
+            return (.pending, preferredRelativePath, preferredURL.path)
         }
 
         let destinationHash = try hashService.sha256(for: preferredURL)
@@ -479,21 +487,23 @@ final class ImportSessionStore: ObservableObject {
                 sourceRelativePath: item.relativePath,
                 captureDate: item.captureDate,
                 mediaKind: item.mediaKind,
+                destinationRootPath: destinationURL.path,
                 destinationPath: preferredRelativePath,
+                destinationAbsolutePath: preferredURL.path,
                 destinationVolumeUUID: destinationVolumeUUID,
                 importedAt: now,
                 verifiedAt: now
             )
             try await ledger.insert(adoptedRecord)
-            return (.imported, preferredRelativePath)
+            return (.imported, preferredRelativePath, preferredURL.path)
         }
 
-        return (.conflict, preferredRelativePath)
+        return (.conflict, preferredRelativePath, preferredURL.path)
     }
 
-    private func configureLedger(destinationURL: URL) {
+    private func configureLedger() {
         do {
-            let openedLedger = try ImportLedger(destinationURL: destinationURL)
+            let openedLedger = try ImportLedger()
             ledger = openedLedger
             Task {
                 ledgerRecordCount = try? await openedLedger.count()

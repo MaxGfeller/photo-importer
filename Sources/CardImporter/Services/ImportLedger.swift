@@ -4,17 +4,16 @@ import Foundation
 actor ImportLedger {
     static let directoryName = ".card-importer"
     static let databaseName = "imports.sqlite"
+    static let applicationSupportDirectoryName = "CardImporter"
 
     private var database: OpaquePointer?
-    let destinationURL: URL
+    let databaseURL: URL
 
-    init(destinationURL: URL) throws {
-        self.destinationURL = destinationURL
+    init() throws {
+        let applicationSupportURL = try Self.applicationSupportURL()
+        try FileManager.default.createDirectory(at: applicationSupportURL, withIntermediateDirectories: true)
 
-        let ledgerDirectory = destinationURL.appendingPathComponent(Self.directoryName, isDirectory: true)
-        try FileManager.default.createDirectory(at: ledgerDirectory, withIntermediateDirectories: true)
-
-        let databaseURL = ledgerDirectory.appendingPathComponent(Self.databaseName)
+        databaseURL = applicationSupportURL.appendingPathComponent(Self.databaseName)
         if sqlite3_open(databaseURL.path, &database) != SQLITE_OK {
             throw AppError.sqlite(Self.errorMessage(database))
         }
@@ -30,7 +29,9 @@ actor ImportLedger {
             source_relative_path TEXT NOT NULL,
             capture_date REAL,
             media_kind TEXT NOT NULL,
+            destination_root_path TEXT,
             destination_path TEXT NOT NULL,
+            destination_absolute_path TEXT,
             destination_volume_uuid TEXT,
             imported_at REAL NOT NULL,
             verified_at REAL NOT NULL,
@@ -38,7 +39,10 @@ actor ImportLedger {
         );
         CREATE INDEX IF NOT EXISTS idx_imports_source ON imports(source_volume_uuid, source_relative_path);
         CREATE INDEX IF NOT EXISTS idx_imports_destination ON imports(destination_path);
+        CREATE INDEX IF NOT EXISTS idx_imports_absolute_destination ON imports(destination_absolute_path);
         """, database: database)
+
+        try Self.migrateSchemaIfNeeded(database: database)
     }
 
     deinit {
@@ -47,11 +51,24 @@ actor ImportLedger {
         }
     }
 
+    static func applicationSupportURL() throws -> URL {
+        guard let baseURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
+            throw AppError.sqlite("Could not resolve the user Application Support directory.")
+        }
+
+        return baseURL.appendingPathComponent(applicationSupportDirectoryName, isDirectory: true)
+    }
+
+    static func defaultDatabaseURL() throws -> URL {
+        try applicationSupportURL().appendingPathComponent(databaseName)
+    }
+
     func record(contentHash: String, byteCount: Int64) throws -> ImportRecord? {
         var statement: OpaquePointer?
         let sql = """
         SELECT id, content_hash, byte_count, original_filename, source_volume_uuid, source_relative_path,
-               capture_date, media_kind, destination_path, destination_volume_uuid, imported_at, verified_at
+               capture_date, media_kind, destination_root_path, destination_path, destination_absolute_path,
+               destination_volume_uuid, imported_at, verified_at
         FROM imports
         WHERE content_hash = ? AND byte_count = ?
         LIMIT 1;
@@ -75,8 +92,9 @@ actor ImportLedger {
         let sql = """
         INSERT OR REPLACE INTO imports (
             content_hash, byte_count, original_filename, source_volume_uuid, source_relative_path,
-            capture_date, media_kind, destination_path, destination_volume_uuid, imported_at, verified_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            capture_date, media_kind, destination_root_path, destination_path, destination_absolute_path,
+            destination_volume_uuid, imported_at, verified_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
         """
 
         try prepare(sql, statement: &statement)
@@ -89,10 +107,12 @@ actor ImportLedger {
         bindText(record.sourceRelativePath, to: statement, at: 5)
         bindDate(record.captureDate, to: statement, at: 6)
         bindText(record.mediaKind.rawValue, to: statement, at: 7)
-        bindText(record.destinationPath, to: statement, at: 8)
-        bindText(record.destinationVolumeUUID, to: statement, at: 9)
-        bindDate(record.importedAt, to: statement, at: 10)
-        bindDate(record.verifiedAt, to: statement, at: 11)
+        bindText(record.destinationRootPath, to: statement, at: 8)
+        bindText(record.destinationPath, to: statement, at: 9)
+        bindText(record.destinationAbsolutePath, to: statement, at: 10)
+        bindText(record.destinationVolumeUUID, to: statement, at: 11)
+        bindDate(record.importedAt, to: statement, at: 12)
+        bindDate(record.verifiedAt, to: statement, at: 13)
 
         guard sqlite3_step(statement) == SQLITE_DONE else {
             throw AppError.sqlite(Self.errorMessage(database))
@@ -109,6 +129,39 @@ actor ImportLedger {
         }
 
         return Int(sqlite3_column_int(statement, 0))
+    }
+
+    private static func migrateSchemaIfNeeded(database: OpaquePointer?) throws {
+        let columns = try columnNames(for: "imports", database: database)
+
+        if !columns.contains("destination_root_path") {
+            try Self.execute("ALTER TABLE imports ADD COLUMN destination_root_path TEXT;", database: database)
+        }
+
+        if !columns.contains("destination_absolute_path") {
+            try Self.execute("ALTER TABLE imports ADD COLUMN destination_absolute_path TEXT;", database: database)
+        }
+
+        try Self.execute("""
+        CREATE INDEX IF NOT EXISTS idx_imports_absolute_destination ON imports(destination_absolute_path);
+        """, database: database)
+    }
+
+    private static func columnNames(for tableName: String, database: OpaquePointer?) throws -> Set<String> {
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(database, "PRAGMA table_info(\(tableName));", -1, &statement, nil) == SQLITE_OK else {
+            throw AppError.sqlite(errorMessage(database))
+        }
+        defer { sqlite3_finalize(statement) }
+
+        var columns = Set<String>()
+        while sqlite3_step(statement) == SQLITE_ROW {
+            if let name = columnString(statement, 1) {
+                columns.insert(name)
+            }
+        }
+
+        return columns
     }
 
     private static func execute(_ sql: String, database: OpaquePointer?) throws {
@@ -152,14 +205,20 @@ actor ImportLedger {
             sourceRelativePath: columnString(statement, 5) ?? "",
             captureDate: columnDate(statement, 6),
             mediaKind: MediaKind(rawValue: columnString(statement, 7) ?? "") ?? .other,
-            destinationPath: columnString(statement, 8) ?? "",
-            destinationVolumeUUID: columnString(statement, 9),
-            importedAt: columnDate(statement, 10) ?? .distantPast,
-            verifiedAt: columnDate(statement, 11) ?? .distantPast
+            destinationRootPath: columnString(statement, 8),
+            destinationPath: columnString(statement, 9) ?? "",
+            destinationAbsolutePath: columnString(statement, 10),
+            destinationVolumeUUID: columnString(statement, 11),
+            importedAt: columnDate(statement, 12) ?? .distantPast,
+            verifiedAt: columnDate(statement, 13) ?? .distantPast
         )
     }
 
     private func columnString(_ statement: OpaquePointer?, _ index: Int32) -> String? {
+        Self.columnString(statement, index)
+    }
+
+    private static func columnString(_ statement: OpaquePointer?, _ index: Int32) -> String? {
         guard sqlite3_column_type(statement, index) != SQLITE_NULL,
               let text = sqlite3_column_text(statement, index) else {
             return nil

@@ -9,7 +9,9 @@ struct ImportRecord: Identifiable, Hashable {
     let sourceRelativePath: String
     let captureDate: Date?
     let mediaKind: MediaKind
+    let destinationRootPath: String?
     let destinationPath: String
+    let destinationAbsolutePath: String?
     let destinationVolumeUUID: String?
     let importedAt: Date
     let verifiedAt: Date

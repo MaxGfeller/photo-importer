@@ -13,6 +13,7 @@ struct MediaItem: Identifiable, Hashable {
     var hash: String?
     var status: ImportStatus
     var destinationPath: String?
+    var destinationAbsolutePath: String?
     var errorMessage: String?
 
     var isSelectableForImport: Bool {
