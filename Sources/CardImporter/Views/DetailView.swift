@@ -92,7 +92,7 @@ struct DetailView: View {
                 .keyboardShortcut("i", modifiers: [.command])
                 .help("Copy selected files to the destination and verify them before recording the import.")
                 .accessibilityLabel("Import Selected")
-                .accessibilityHint("Imports selected files after verifying each copied file with SHA-256.")
+                .accessibilityHint("Imports selected files after verifying each copied file with a sampled fingerprint.")
             }
         }
     }

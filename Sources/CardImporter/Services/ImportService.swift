@@ -1,11 +1,11 @@
 import Foundation
 
 struct ImportService {
-    private let hashService = FileHashService()
+    private let fingerprintService = FileFingerprintService()
     private let pathBuilder = DestinationPathBuilder()
 
     func importItem(_ item: MediaItem, destinationRoot: URL, ledger: ImportLedger) async throws -> ImportRecord {
-        let sourceHash = try hashService.sha256(for: item.url)
+        let sourceFingerprint = try fingerprintService.fingerprint(for: item.url, byteCount: item.byteCount)
         let target = try pathBuilder.availableDestinationURL(for: item, destinationRoot: destinationRoot)
         let targetDirectory = target.url.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: targetDirectory, withIntermediateDirectories: true)
@@ -16,9 +16,9 @@ struct ImportService {
         do {
             try FileManager.default.copyItem(at: item.url, to: tempURL)
             didCreateTemporaryCopy = true
-            let copiedHash = try hashService.sha256(for: tempURL)
+            let copiedFingerprint = try fingerprintService.fingerprint(for: tempURL, byteCount: item.byteCount)
 
-            guard sourceHash == copiedHash else {
+            guard sourceFingerprint == copiedFingerprint else {
                 throw AppError.copyVerificationFailed(filename: item.filename)
             }
 
@@ -32,7 +32,7 @@ struct ImportService {
             let destinationVolumeUUID = try? destinationRoot.resourceValues(forKeys: [.volumeUUIDStringKey]).volumeUUIDString
             let record = ImportRecord(
                 id: nil,
-                contentHash: sourceHash,
+                contentHash: sourceFingerprint,
                 byteCount: item.byteCount,
                 originalFilename: item.filename,
                 sourceVolumeUUID: item.sourceVolumeUUID,

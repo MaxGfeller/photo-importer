@@ -22,7 +22,7 @@ final class ImportSessionStore: ObservableObject {
 
     private let volumeService = VolumeService()
     private let scanner = MediaScanner()
-    private let hashService = FileHashService()
+    private let fingerprintService = FileFingerprintService()
     private let pathBuilder = DestinationPathBuilder()
     private let importService = ImportService()
 
@@ -283,7 +283,7 @@ final class ImportSessionStore: ObservableObject {
                 }.value
             }
 
-            progress = ImportProgress(currentFilename: nil, completedCount: 0, totalCount: destinationItems.count, currentMessage: "Hashing destination")
+            progress = ImportProgress(currentFilename: nil, completedCount: 0, totalCount: destinationItems.count, currentMessage: "Fingerprinting destination")
 
             for (index, item) in destinationItems.enumerated() {
                 try Task.checkCancellation()
@@ -291,18 +291,18 @@ final class ImportSessionStore: ObservableObject {
                     currentFilename: item.filename,
                     completedCount: index,
                     totalCount: destinationItems.count,
-                    currentMessage: "Hashing destination"
+                    currentMessage: "Fingerprinting destination"
                 )
 
-                let hash = try await Task.detached(priority: .utility) {
-                    try self.hashService.sha256(for: item.url)
+                let fingerprint = try await Task.detached(priority: .utility) {
+                    try self.fingerprintService.fingerprint(for: item.url, byteCount: item.byteCount)
                 }.value
 
                 let now = Date()
                 let destinationVolumeUUID = try? destinationURL.resourceValues(forKeys: [.volumeUUIDStringKey]).volumeUUIDString
                 let record = ImportRecord(
                     id: nil,
-                    contentHash: hash,
+                    contentHash: fingerprint,
                     byteCount: item.byteCount,
                     originalFilename: item.filename,
                     sourceVolumeUUID: item.sourceVolumeUUID,
@@ -416,17 +416,17 @@ final class ImportSessionStore: ObservableObject {
             )
 
             do {
-                let hash = try await Task.detached(priority: .utility) {
-                    try self.hashService.sha256(for: item.url)
+                let fingerprint = try await Task.detached(priority: .utility) {
+                    try self.fingerprintService.fingerprint(for: item.url, byteCount: item.byteCount)
                 }.value
 
-                let classification = try await classify(item: item, hash: hash, destinationURL: destinationURL, ledger: ledger)
+                let classification = try await classify(item: item, fingerprint: fingerprint, destinationURL: destinationURL, ledger: ledger)
 
                 updateItem(id: item.id) { updated in
                     guard updated.status != .importing else {
                         return
                     }
-                    updated.hash = hash
+                    updated.hash = fingerprint
                     updated.status = classification.status
                     updated.destinationPath = classification.destinationPath
                     updated.destinationAbsolutePath = classification.destinationAbsolutePath
@@ -455,11 +455,11 @@ final class ImportSessionStore: ObservableObject {
 
     private func classify(
         item: MediaItem,
-        hash: String,
+        fingerprint: String,
         destinationURL: URL?,
         ledger: ImportLedger
     ) async throws -> (status: ImportStatus, destinationPath: String?, destinationAbsolutePath: String?) {
-        if let record = try await ledger.record(contentHash: hash, byteCount: item.byteCount) {
+        if let record = try await ledger.record(contentHash: fingerprint, byteCount: item.byteCount) {
             return (.imported, record.destinationPath, record.destinationAbsolutePath)
         }
 
@@ -474,13 +474,13 @@ final class ImportSessionStore: ObservableObject {
             return (.pending, preferredRelativePath, preferredURL.path)
         }
 
-        let destinationHash = try hashService.sha256(for: preferredURL)
-        if destinationHash == hash {
+        let destinationFingerprint = try fingerprintService.fingerprint(for: preferredURL, byteCount: item.byteCount)
+        if destinationFingerprint == fingerprint {
             let now = Date()
             let destinationVolumeUUID = try? destinationURL.resourceValues(forKeys: [.volumeUUIDStringKey]).volumeUUIDString
             let adoptedRecord = ImportRecord(
                 id: nil,
-                contentHash: hash,
+                contentHash: fingerprint,
                 byteCount: item.byteCount,
                 originalFilename: item.filename,
                 sourceVolumeUUID: item.sourceVolumeUUID,
