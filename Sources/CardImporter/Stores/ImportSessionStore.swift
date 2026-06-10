@@ -126,10 +126,6 @@ final class ImportSessionStore: ObservableObject {
         destinationURL = url
         BookmarkStore.saveDestination(url)
         statusMessage = "Destination set to \(url.lastPathComponent)."
-
-        if !items.isEmpty {
-            startClassification()
-        }
     }
 
     func scanSource() async {
@@ -254,7 +250,6 @@ final class ImportSessionStore: ObservableObject {
 
         isImporting = false
         progress = ImportProgress()
-        startClassification()
     }
 
     func indexExistingDestination() async {
