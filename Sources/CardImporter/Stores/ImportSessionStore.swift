@@ -28,6 +28,7 @@ final class ImportSessionStore: ObservableObject {
 
     private var ledger: ImportLedger?
     private var classificationTask: Task<Void, Never>?
+    private var selectionAnchorItemID: MediaItem.ID?
 
     var filteredItems: [MediaItem] {
         items.filter { item in
@@ -100,6 +101,7 @@ final class ImportSessionStore: ObservableObject {
         BookmarkStore.saveSource(volume.url)
         items = []
         selectedItemIDs = []
+        selectionAnchorItemID = nil
         statusMessage = "Selected \(volume.name)."
     }
 
@@ -114,6 +116,7 @@ final class ImportSessionStore: ObservableObject {
         BookmarkStore.saveSource(url)
         items = []
         selectedItemIDs = []
+        selectionAnchorItemID = nil
         statusMessage = "Selected \(url.lastPathComponent)."
     }
 
@@ -142,6 +145,7 @@ final class ImportSessionStore: ObservableObject {
         isScanning = true
         statusMessage = "Scanning \(sourceURL.lastPathComponent)..."
         selectedItemIDs = []
+        selectionAnchorItemID = nil
         progress = ImportProgress(currentFilename: nil, completedCount: 0, totalCount: 0, currentMessage: "Scanning source")
 
         do {
@@ -334,19 +338,30 @@ final class ImportSessionStore: ObservableObject {
             return
         }
 
+        let modifiers = NSEvent.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if modifiers.contains(.shift),
+           let selectionAnchorItemID,
+           selectRange(from: selectionAnchorItemID, to: item.id) {
+            return
+        }
+
         if selectedItemIDs.contains(item.id) {
             selectedItemIDs.remove(item.id)
         } else {
             selectedItemIDs.insert(item.id)
         }
+        selectionAnchorItemID = item.id
     }
 
     func selectAllVisibleNew() {
-        selectedItemIDs.formUnion(filteredItems.filter(\.isSelectableForImport).map(\.id))
+        let importableIDs = filteredItems.filter(\.isSelectableForImport).map(\.id)
+        selectedItemIDs.formUnion(importableIDs)
+        selectionAnchorItemID = importableIDs.last ?? selectionAnchorItemID
     }
 
     func clearSelection() {
         selectedItemIDs.removeAll()
+        selectionAnchorItemID = nil
     }
 
     func revealSource(_ item: MediaItem) {
@@ -506,5 +521,25 @@ final class ImportSessionStore: ObservableObject {
             return
         }
         mutate(&items[index])
+    }
+
+    @discardableResult
+    private func selectRange(from anchorID: MediaItem.ID, to targetID: MediaItem.ID) -> Bool {
+        let visibleItems = filteredItems
+
+        guard let anchorIndex = visibleItems.firstIndex(where: { $0.id == anchorID }),
+              let targetIndex = visibleItems.firstIndex(where: { $0.id == targetID }) else {
+            return false
+        }
+
+        let lowerBound = min(anchorIndex, targetIndex)
+        let upperBound = max(anchorIndex, targetIndex)
+        let rangeIDs = visibleItems[lowerBound...upperBound]
+            .filter(\.isSelectableForImport)
+            .map(\.id)
+
+        selectedItemIDs.formUnion(rangeIDs)
+        selectionAnchorItemID = targetID
+        return true
     }
 }
