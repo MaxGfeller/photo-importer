@@ -11,13 +11,11 @@ struct ImportService {
         try FileManager.default.createDirectory(at: targetDirectory, withIntermediateDirectories: true)
 
         let tempURL = targetDirectory.appendingPathComponent(".\(target.url.lastPathComponent).tmp-\(UUID().uuidString)")
+        var didCreateTemporaryCopy = false
 
         do {
-            if FileManager.default.fileExists(atPath: tempURL.path) {
-                try FileManager.default.removeItem(at: tempURL)
-            }
-
             try FileManager.default.copyItem(at: item.url, to: tempURL)
+            didCreateTemporaryCopy = true
             let copiedHash = try hashService.sha256(for: tempURL)
 
             guard sourceHash == copiedHash else {
@@ -25,9 +23,10 @@ struct ImportService {
             }
 
             if FileManager.default.fileExists(atPath: target.url.path) {
-                try FileManager.default.removeItem(at: target.url)
+                throw CocoaError(.fileWriteFileExists)
             }
             try FileManager.default.moveItem(at: tempURL, to: target.url)
+            didCreateTemporaryCopy = false
 
             let now = Date()
             let destinationVolumeUUID = try? destinationRoot.resourceValues(forKeys: [.volumeUUIDStringKey]).volumeUUIDString
@@ -49,7 +48,8 @@ struct ImportService {
             try await ledger.insert(record)
             return record
         } catch {
-            if FileManager.default.fileExists(atPath: tempURL.path) {
+            // Only clean up the hidden temporary copy created by this import attempt.
+            if didCreateTemporaryCopy, FileManager.default.fileExists(atPath: tempURL.path) {
                 try? FileManager.default.removeItem(at: tempURL)
             }
             throw error

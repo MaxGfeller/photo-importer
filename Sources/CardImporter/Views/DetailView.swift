@@ -59,6 +59,9 @@ struct DetailView: View {
                     Label("Scan", systemImage: "arrow.clockwise")
                 }
                 .disabled(store.sourceURL == nil || store.isScanning || store.isImporting)
+                .help("Scan the selected source again and refresh the preview grid.")
+                .accessibilityLabel("Scan Source")
+                .accessibilityHint("Scans the selected SD card or source folder again.")
 
                 Button {
                     store.selectAllVisibleNew()
@@ -66,6 +69,9 @@ struct DetailView: View {
                     Label("Select Importable", systemImage: "checklist")
                 }
                 .disabled(store.filteredItems.allSatisfy { !$0.isSelectableForImport })
+                .help("Select all visible files that can be imported.")
+                .accessibilityLabel("Select Importable")
+                .accessibilityHint("Selects all importable files shown by the current filter and search.")
 
                 Button {
                     store.clearSelection()
@@ -73,6 +79,9 @@ struct DetailView: View {
                     Label("Clear Selection", systemImage: "xmark.circle")
                 }
                 .disabled(store.selectedItemIDs.isEmpty)
+                .help("Clear the current image selection.")
+                .accessibilityLabel("Clear Selection")
+                .accessibilityHint("Deselects all currently selected files.")
 
                 Button {
                     Task { await store.importSelected() }
@@ -81,6 +90,9 @@ struct DetailView: View {
                 }
                 .disabled(!store.canImportSelection)
                 .keyboardShortcut("i", modifiers: [.command])
+                .help("Copy selected files to the destination and verify them before recording the import.")
+                .accessibilityLabel("Import Selected")
+                .accessibilityHint("Imports selected files after verifying each copied file with SHA-256.")
             }
         }
     }
