@@ -8,7 +8,12 @@ struct SidebarView: View {
             List(selection: selectedVolumeBinding) {
                 Section("Source") {
                     ForEach(store.volumes) { volume in
-                        VolumeRow(volume: volume)
+                        VolumeRow(
+                            volume: volume,
+                            isEjectDisabled: !store.canEject(volume)
+                        ) {
+                            Task { await store.ejectVolume(volume) }
+                        }
                             .tag(volume.id)
                     }
 
@@ -46,6 +51,16 @@ struct SidebarView: View {
                         Label("Index Existing Media", systemImage: "checklist.checked")
                     }
                     .disabled(store.destinationURL == nil || store.isIndexing || store.isImporting)
+
+                    if let destinationVolume = store.destinationVolume, destinationVolume.canEject {
+                        Button {
+                            Task { await store.ejectDestinationVolume() }
+                        } label: {
+                            Label("Eject Destination", systemImage: "eject")
+                        }
+                        .disabled(!store.canEject(destinationVolume))
+                        .help("Eject \(destinationVolume.name).")
+                    }
                 }
             }
             .listStyle(.sidebar)
@@ -92,6 +107,8 @@ struct SidebarView: View {
 
 private struct VolumeRow: View {
     let volume: VolumeInfo
+    let isEjectDisabled: Bool
+    let ejectAction: () -> Void
 
     var body: some View {
         HStack(spacing: 10) {
@@ -119,6 +136,19 @@ private struct VolumeRow: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
+            }
+
+            Spacer(minLength: 8)
+
+            if volume.canEject {
+                Button(action: ejectAction) {
+                    Image(systemName: "eject")
+                        .imageScale(.small)
+                }
+                .buttonStyle(.borderless)
+                .disabled(isEjectDisabled)
+                .help("Eject \(volume.name).")
+                .accessibilityLabel("Eject \(volume.name)")
             }
         }
     }

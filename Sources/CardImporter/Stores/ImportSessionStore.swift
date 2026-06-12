@@ -73,6 +73,18 @@ final class ImportSessionStore: ObservableObject {
         selectedItems.reduce(0) { $0 + $1.byteCount }
     }
 
+    var isBusyWithFiles: Bool {
+        isScanning || isClassifying || isImporting || isIndexing
+    }
+
+    var destinationVolume: VolumeInfo? {
+        guard let destinationURL else {
+            return nil
+        }
+
+        return volumeService.volume(containing: destinationURL, in: volumes)
+    }
+
     init() {
         sourceURL = BookmarkStore.resolveSource()
         destinationURL = BookmarkStore.resolveDestination()
@@ -92,6 +104,33 @@ final class ImportSessionStore: ObservableObject {
         }
     }
 
+    func canEject(_ volume: VolumeInfo) -> Bool {
+        volume.canEject && !isBusyWithFiles
+    }
+
+    func ejectVolume(_ volume: VolumeInfo) async {
+        guard canEject(volume) else {
+            return
+        }
+
+        do {
+            try NSWorkspace.shared.unmountAndEjectDevice(at: volume.url)
+            statusMessage = "Ejected \(volume.name)."
+            clearLocations(on: volume)
+            await refreshVolumes()
+        } catch {
+            errorMessage = "Could not eject \(volume.name): \(error.localizedDescription)"
+        }
+    }
+
+    func ejectDestinationVolume() async {
+        guard let destinationVolume else {
+            return
+        }
+
+        await ejectVolume(destinationVolume)
+    }
+
     func selectVolume(_ volume: VolumeInfo) {
         classificationTask?.cancel()
         selectedVolumeID = volume.id
@@ -101,6 +140,27 @@ final class ImportSessionStore: ObservableObject {
         selectedItemIDs = []
         selectionAnchorItemID = nil
         statusMessage = "Selected \(volume.name)."
+    }
+
+    private func clearLocations(on volume: VolumeInfo) {
+        if let currentSourceURL = sourceURL, volumeContains(url: currentSourceURL, volume: volume) {
+            classificationTask?.cancel()
+            self.sourceURL = nil
+            selectedVolumeID = nil
+            items = []
+            selectedItemIDs = []
+            selectionAnchorItemID = nil
+        }
+
+        if let destinationURL, volumeContains(url: destinationURL, volume: volume) {
+            self.destinationURL = nil
+        }
+    }
+
+    private func volumeContains(url: URL, volume: VolumeInfo) -> Bool {
+        let path = url.standardizedFileURL.path
+        let volumePath = volume.url.standardizedFileURL.path
+        return path == volumePath || path.hasPrefix("\(volumePath)/")
     }
 
     func chooseSourceFolder() {

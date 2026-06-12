@@ -45,4 +45,17 @@ struct VolumeService {
             return lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
         }
     }
+
+    func volume(containing url: URL, in volumes: [VolumeInfo]) -> VolumeInfo? {
+        let path = url.standardizedFileURL.path
+
+        return volumes
+            .filter { volume in
+                let volumePath = volume.url.standardizedFileURL.path
+                return path == volumePath || path.hasPrefix("\(volumePath)/")
+            }
+            .max { lhs, rhs in
+                lhs.url.path.count < rhs.url.path.count
+            }
+    }
 }

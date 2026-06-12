@@ -9,4 +9,8 @@ struct VolumeInfo: Identifiable, Hashable {
     let isEjectable: Bool
     let capacity: Int64?
     let availableCapacity: Int64?
+
+    var canEject: Bool {
+        isRemovable || isEjectable
+    }
 }
