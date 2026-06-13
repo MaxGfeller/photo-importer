@@ -1,5 +1,9 @@
 # CardImporter
 
+<p align="center">
+  <img src="Resources/AppIcon.png" alt="CardImporter app icon" width="128" height="128">
+</p>
+
 A small macOS SwiftUI importer for SD cards and camera folders.
 
 ![CardImporter showing selected photos during import](docs/screenshot.png)
